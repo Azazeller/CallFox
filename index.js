@@ -1,49 +1,71 @@
-
-import express from 'express';
-import fetch from 'node-fetch';
-
+import express from "express";
+import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
-
-const TOKEN = process.env.TELEGRAM_TOKEN;
+const TOKEN = process.env.TELEGRAM_TOKEN; // твой телеграм бот токен
 const API_KEY = process.env.CRYPT_CLOUD_API_KEY;
-const MERCHANT = process.env.MERCHANT_ID;
-
-app.get('/', (req, res) => res.send('CallFox bot is running'));
-
-app.post('/webhook', async (req, res) => {
-    console.log('Webhook received:', req.body);
-
-    if (req.body.type === 'payment' && req.body.status === 'paid') {
-        const chatId = req.body.order_id;
-        await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                chat_id: chatId,
-                text: "Оплата подтверждена! Спасибо 🔥"
-            })
-        });
-    }
-    res.sendStatus(200);
+const MERCHANT_ID = process.env.MERCHANT_ID;
+// ID для уведомлений
+const ADMIN_ID = "399248837";
+app.get("/", (req, res) => {
+    res.send("CallFox bot running");
 });
-
-app.post('/bot', async (req, res) => {
-    const body = req.body;
-    if (!body.message) return res.sendStatus(200);
-
-    const chatId = body.message.chat.id;
-
+/**
+ * ---------------------------
+ * CRYPTOCLOUD WEBHOOK
+ * ---------------------------
+ */
+app.post("/webhook", async (req, res) => {
+    console.log("Webhook:", req.body);
+    try {
+        // CryptoCloud структура:
+        // { event: "payment", data: { status: "paid", order_id: "...", amount: ... } }
+        const { event, data } = req.body;
+        if (event === "payment" && data.status === "paid") {
+            const chatId = data.order_id; // order_id = chat_id
+            // сообщение пользователю
+            await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: "Оплата успешно подтверждена! 🔥\nНачинаем работу."
+                })
+            });
+            // уведомление админу
+            await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    chat_id: ADMIN_ID,
+                    text: `🔥 Новый заказ!\nЗаказ от chat_id: ${chatId}\nСумма: ${data.amount} ${data.currency}`
+                })
+            });
+        }
+        res.sendStatus(200);
+    } catch (err) {
+        console.error("Webhook error:", err);
+        res.sendStatus(500);
+    }
+});
+/**
+ * ---------------------------
+ * TELEGRAM BOT WEBHOOK HANDLER
+ * ---------------------------
+ */
+app.post("/telegram-webhook", async (req, res) => {
+    const msg = req.body.message;
+    if (!msg) return res.sendStatus(200);
+    const chatId = msg.chat.id;
+    // отправляем ссылку на оплату
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             chat_id: chatId,
-            text: "Для оформления платежа используйте ссылку: https://cryptocloud.plus/pay/" + MERCHANT
+            text: `Для оплаты перейдите по ссылке:\nhttps://cryptocloud.plus/pay/${MERCHANT_ID}\n\nВаш ID заказа: ${chatId}`
         })
     });
-
     res.sendStatus(200);
 });
-
-app.listen(3000, () => console.log('Server running on port 3000'));
+app.listen(3000, () => console.log("Server running on port 3000"));
