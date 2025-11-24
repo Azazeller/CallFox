@@ -1,139 +1,102 @@
 import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
+
 dotenv.config();
+
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-// ============================
-// CONFIG
-// ============================
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const CRYPTO_SECRET = process.env.CRYPTO_SECRET;
-const SERVER_URL = process.env.SERVER_URL;
-const CRYPTO_SHOP_ID = process.env.CRYPTO_SHOP_ID;
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-// ============================
-// SEND MESSAGE
-// ============================
-async function sendMessage(chatId, text, keyboard = null) {
+const ADMIN_ID = process.env.ADMIN_ID;
+const CRYPTOCLOUD_API_KEY = process.env.CRYPTOCLOUD_API_KEY;
+const CRYPTOCLOUD_SHOP_ID = process.env.CRYPTOCLOUD_SHOP_ID;
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
+
+// Telegram API URL
+const TG = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+// Логируем загрузку
+console.log("Bot is starting…");
+
+// -------------------------
+// УСТАНОВКА WEBHOOK
+// -------------------------
+async function setWebhook() {
     try {
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        const url = `${TG}/setWebhook?url=${WEBHOOK_URL}`;
+        const res = await axios.get(url);
+        console.log("Webhook set result:", res.data);
+    } catch (err) {
+        console.error("Webhook error:", err.response?.data || err.message);
+    }
+}
+
+setWebhook();
+
+// -------------------------
+// ОТПРАВКА СООБЩЕНИЯ
+// -------------------------
+async function sendMessage(chatId, text) {
+    try {
+        await axios.post(`${TG}/sendMessage`, {
             chat_id: chatId,
-            text,
-            parse_mode: "HTML",
-            reply_markup: keyboard
+            text: text
         });
     } catch (err) {
-        console.log("Telegram sendMessage error:", err.response?.data || err.message);
+        console.error("sendMessage error:", err.response?.data || err.message);
     }
 }
-// ============================
-// START MESSAGE
-// ============================
-async function sendStartMessage(chatId) {
-    const text = `
-<b>Что умеет этот бот?</b>
-📦 Выберите тариф OSINT-проверки:
-🔹 <b>MINI — $15</b>
-Быстрая справка: соцсети, ники, упоминания, базовый цифровой след.
-🔹 <b>BASIC — $49</b>
-Расширенная проверка: соцсети, окружение, репутация, открытые реестры.
-🔹 <b>EXTENDED — $199</b>
-Глубокий OSINT-профиль: связи, окружение, риски, дата-лейки, аналитика.
-🔹 <b>INDIVIDUAL — индивидуально</b>
-Поиск конкретной информации под запрос клиента, любого формата.
-🛒 Вы можете сразу оформить заказ через раздел «Корзина»
-    `;
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "💳 MINI — $15", callback_data: "pay_mini" }],
-            [{ text: "💳 BASIC — $49", callback_data: "pay_basic" }],
-            [{ text: "💳 EXTENDED — $199", callback_data: "pay_extended" }],
-            [{ text: "💳 INDIVIDUAL — договорная", callback_data: "pay_individual" }]
-        ]
-    };
-    await sendMessage(chatId, text, keyboard);
-}
-// ============================
-// TELEGRAM WEBHOOK
-// ============================
+
+// -------------------------
+// ОСНОВНОЙ WEBHOOK
+// -------------------------
 app.post("/webhook", async (req, res) => {
-    res.sendStatus(200);
-    try {
-        const body = req.body;
-        // TEXT MESSAGE
-        if (body.message) {
-            const chatId = body.message.chat.id;
-            const text = body.message.text;
-            if (text === "/start") {
-                return sendStartMessage(chatId);
-            }
-            // IMPORTANT: NO ADMIN ECHO HERE
-            return;
-        }
-        // BUTTON PRESS
-        if (body.callback_query) {
-            const chatId = body.callback_query.message.chat.id;
-            const data = body.callback_query.data;
-            const prices = {
-                pay_mini: 15,
-                pay_basic: 49,
-                pay_extended: 199,
-                pay_individual: 0
-            };
-            const amount = prices[data];
-            if (amount === 0) {
-                return sendMessage(chatId, "💬 Напишите ваш запрос, и мы рассчитаем стоимость индивидуально.");
-            }
-            const invoice = await axios.post(
-                "https://api.cryptocloud.plus/v2/invoice/create",
-                {
-                    shop_id: CRYPTO_SHOP_ID,
-                    amount,
-                    currency: "USD",
-                    order_id: "ORDER" + Date.now(),
-                    email: "none",
-                    webhook_url: `${SERVER_URL}/cryptocloud`
-                },
-                {
-                    headers: { Authorization: `Token ${CRYPTO_SECRET}` }
-                }
-            );
-            const payUrl = invoice.data?.data?.pay_url;
-            return sendMessage(chatId, `💳 <b>Ваш счёт на оплату:</b>\n${payUrl}`);
-        }
-    } catch (err) {
-        console.log("Webhook error:", err);
+    res.sendStatus(200); // Telegram должен получить 200 OK сразу
+
+    if (!req.body.message) return;
+
+    const msg = req.body.message;
+    const chatId = msg.chat.id;
+    const text = msg.text || "";
+
+    // Отправляем админу уведомление о новом сообщении
+    await sendMessage(
+        ADMIN_ID,
+        `📩 Новый пользователь: ${chatId}\nСообщение: ${text}`
+    );
+
+    // Обработка команд
+    if (text === "/start") {
+        await sendMessage(
+            chatId,
+            `Выберите тариф OSINT-проверки:
+
+🔹 MINI — $15
+Быстрая справка: соцсети, ники, упоминания, базовый цифровой след.
+
+🔹 BASIC — $49
+Расширенная проверка: соцсети, окружение, репутация, открытые реестры.
+
+🔹 EXTENDED — $199
+Глубокий OSINT-профиль: связи, окружение, риски, даталейки, аналитика.
+
+🔹 INDIVIDUAL — индивидуально
+Поиск информации под ваш запрос.
+
+Чтобы оформить заказ — напишите нужный тариф.`
+        );
+        return;
     }
+
+    // Ответ пользователю (чтобы бот не молчал)
+    await sendMessage(chatId, "Ваше сообщение получено. Ожидайте ответа.");
 });
-// ============================
-// CRYPTOCLOUD WEBHOOK
-// ============================
-app.post("/cryptocloud", async (req, res) => {
-    res.sendStatus(200);
-    try {
-        const data = req.body;
-        if (data.event === "invoice_paid") {
-            await sendMessage(
-                ADMIN_CHAT_ID,
-                `💰 Оплата получена!\nOrder: ${data.order_id}\nAmount: ${data.amount} USD`
-            );
-        }
-    } catch (e) {
-        console.log("CryptoCloud webhook error:", e);
-    }
-});
-// ============================
-// ROOT
-// ============================
-app.get("/", (req, res) => {
-    res.send("CallFox bot is running.");
-});
-// ============================
-// START SERVER
-// ============================
-app.listen(3000, () => {
-    console.log("Server running on port 3000");
+
+// -------------------------
+// СТАРТ СЕРВЕРА
+// -------------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
