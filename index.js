@@ -1,131 +1,189 @@
 import express from "express";
 import axios from "axios";
+import bodyParser from "body-parser";
 import dotenv from "dotenv";
 
 dotenv.config();
+
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const CRYPTOCLOUD_API_KEY = process.env.CRYPTOCLOUD_API_KEY;
-const CRYPTOCLOUD_SHOP_ID = process.env.CRYPTOCLOUD_SHOP_ID;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_ID = process.env.ADMIN_ID;
 
-const TELEGRAM_URL = `https://api.telegram.org/bot${TOKEN}`;
+const CRYPTOCLOUD_KEY = process.env.CRYPTOCLOUD_API_KEY;
+const CRYPTOCLOUD_SHOP = process.env.CRYPTOCLOUD_SHOP_ID;
 
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// ========== SEND MESSAGE ==========
+/* ────────────────────────────────────────────────────── */
+/*  УСТАНОВКА WEBHOOK TELEGRAM                            */
+/* ────────────────────────────────────────────────────── */
+async function setWebhook() {
+  try {
+    await axios.get(
+      `${TELEGRAM_API}/setWebhook?url=${WEBHOOK_URL}`
+    );
+    console.log("Webhook установлен:", WEBHOOK_URL);
+  } catch (err) {
+    console.error("Ошибка установки webhook:", err.response?.data || err.message);
+  }
+}
+
+/* ────────────────────────────────────────────────────── */
+/*  ОТПРАВКА СООБЩЕНИЙ В TELEGRAM                         */
+/* ────────────────────────────────────────────────────── */
 async function sendMessage(chatId, text, markup = null) {
-    try {
-        const payload = { chat_id: chatId, text };
-
-        if (markup) payload.reply_markup = markup;
-
-        const res = await axios.post(`${TELEGRAM_URL}/sendMessage`, payload);
-        return res.data;
-    } catch (err) {
-        console.log("sendMessage error:", err.response?.data);
-    }
-}
-
-
-// ========== CREATE CRYPTOCLOUD INVOICE ==========
-async function createInvoice(amount, userId) {
-    try {
-        const res = await axios.post(
-            "https://api.cryptocloud.plus/v2/invoice/create",
-            {
-                shop_id: CRYPTOCLOUD_SHOP_ID,
-                amount: amount,
-                order_id: `${userId}_${Date.now()}`,
-            },
-            {
-                headers: {
-                    Authorization: CRYPTOCLOUD_API_KEY,
-                    "Content-Type": "application/json"
-                }
-            }
-        );
-
-        return res.data;
-    } catch (e) {
-        console.log("Invoice error:", e.response?.data);
-        return null;
-    }
-}
-
-
-// ========== WEBHOOK HANDLER ==========
-app.post("/webhook", async (req, res) => {
-    res.sendStatus(200);
-
-    const update = req.body;
-
-    if (!update.message) return;
-
-    const chatId = update.message.chat.id;
-    const text = update.message.text || "";
-
-    // Сообщение админу о новом пользователе
-    if (chatId !== Number(ADMIN_CHAT_ID)) {
-        await sendMessage(
-            ADMIN_CHAT_ID,
-            `📩 Новый пользователь: ${chatId}\nСообщение: ${text}`
-        );
-    }
-
-
-    // КОМАНДА /start
-    if (text === "/start") {
-        await sendMessage(chatId,
-            "Что умеет этот бот?\n\n" +
-            "📦 Выберите тариф OSINT-проверки:",
-            {
-                keyboard: [
-                    [{ text: "MINI — $15" }],
-                    [{ text: "BASIC — $49" }],
-                    [{ text: "EXTENDED — $199" }],
-                    [{ text: "INDIVIDUAL — договоримся" }]
-                ],
-                resize_keyboard: true
-            }
-        );
-        return;
-    }
-
-    // TARIFS
-    const prices = {
-        "MINI — $15": 15,
-        "BASIC — $49": 49,
-        "EXTENDED — $199": 199,
-        "INDIVIDUAL — договоримся": 0
+  try {
+    const payload = {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML"
     };
 
-    if (prices[text] !== undefined) {
-        const amount = prices[text];
+    if (markup) payload.reply_markup = markup;
 
-        if (amount === 0) {
-            await sendMessage(chatId, "Напишите ваш запрос, и я оценю стоимость 🔍");
-            return;
+    const res = await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+    return res.data;
+  } catch (e) {
+    console.log("sendMessage error:", e.response?.data || e.message);
+  }
+}
+
+/* ────────────────────────────────────────────────────── */
+/*  МЕНЮ ТАРИФОВ                                          */
+/* ────────────────────────────────────────────────────── */
+function getTariffKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "MINI — $15" }],
+      [{ text: "BASIC — $49" }],
+      [{ text: "EXTENDED — $199" }],
+      [{ text: "INDIVIDUAL" }]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true
+  };
+}
+
+/* ────────────────────────────────────────────────────── */
+/*  СОЗДАНИЕ ПЛАТЕЖА CRYPTOCLOUD                          */
+/* ────────────────────────────────────────────────────── */
+async function createCryptoInvoice(amount, orderId) {
+  try {
+    const response = await axios.post(
+      "https://api.cryptocloud.plus/v2/invoice/create",
+      {
+        shop_id: CRYPTOCLOUD_SHOP,
+        amount,
+        currency: "USD",
+        order_id: orderId,
+      },
+      {
+        headers: {
+          "Authorization": CRYPTOCLOUD_KEY,
+          "Content-Type": "application/json"
         }
+      }
+    );
 
-        const invoice = await createInvoice(amount, chatId);
+    return response.data;
+  } catch (err) {
+    console.error("Invoice error:", err.response?.data || err.message);
+    return null;
+  }
+}
 
-        if (invoice?.status === "success") {
-            await sendMessage(
-                chatId,
-                `💳 Для оплаты перейдите по ссылке:\n${invoice.pay_url}`
-            );
-        } else {
-            await sendMessage(chatId, "Ошибка при создании счета.");
-        }
+/* ────────────────────────────────────────────────────── */
+/*  TELEGRAM WEBHOOK                                      */
+/* ────────────────────────────────────────────────────── */
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200);
 
-        return;
+  const update = req.body;
+  if (!update.message) return;
+
+  const msg = update.message;
+  const text = msg.text;
+  const userId = msg.chat.id;
+
+  // Уведомление администратора
+  await sendMessage(
+    ADMIN_ID,
+    `📩 <b>Новый пользователь:</b> ${userId}\nСообщение: ${text}`
+  );
+
+  /* /start */
+  if (text === "/start") {
+    await sendMessage(
+      userId,
+      "Выберите тариф OSINT-проверки:",
+      getTariffKeyboard()
+    );
+    return;
+  }
+
+  /* Выбор тарифа */
+  const tariffs = {
+    "MINI — $15": 15,
+    "BASIC — $49": 49,
+    "EXTENDED — $199": 199,
+    "INDIVIDUAL": 99
+  };
+
+  if (tariffs[text]) {
+    const price = tariffs[text];
+    const orderId = `${userId}_${Date.now()}`;
+
+    const invoice = await createCryptoInvoice(price, orderId);
+
+    if (!invoice || !invoice.result) {
+      await sendMessage(userId, "Ошибка создания платежа. Попробуйте позже.");
+      return;
     }
+
+    const payUrl = invoice.result.url;
+
+    await sendMessage(
+      userId,
+      `Ваш заказ создан.\n\n💵 Сумма: <b>${price}$</b>\n\nПерейдите к оплате:\n${payUrl}`
+    );
+
+    await sendMessage(
+      ADMIN_ID,
+      `🧾 Новый заказ:\nПользователь: ${userId}\nТариф: ${text}\nСумма: ${price}$`
+    );
+  }
 });
 
+/* ────────────────────────────────────────────────────── */
+/*  CRYPTOCLOUD WEBHOOK ОБ ОПЛАТЕ                        */
+/* ────────────────────────────────────────────────────── */
+app.post("/cryptocloud", async (req, res) => {
+  res.sendStatus(200);
 
-// ========== RUN SERVER ==========
-app.listen(process.env.PORT, () => {
-    console.log("Server running on port", process.env.PORT);
+  const data = req.body;
+
+  if (data.status === "paid") {
+    const orderId = data.order_id;
+    const paidUser = orderId.split("_")[0];
+
+    await sendMessage(paidUser, "💳 Ваш платёж получен! Мы начинаем работу.");
+
+    await sendMessage(
+      ADMIN_ID,
+      `💰 Оплата получена!\nOrderID: ${orderId}`
+    );
+  }
+});
+
+/* ────────────────────────────────────────────────────── */
+/*  ЗАПУСК СЕРВЕРА                                        */
+/* ────────────────────────────────────────────────────── */
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}`);
+  await setWebhook();
 });
