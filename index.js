@@ -7,8 +7,11 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+/* ============================================================
+   CONFIG
+============================================================ */
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = process.env.ADMIN_ID;
+const ADMIN_ID = 399248837; // твой ID, жестко задан
 const BASE_URL = process.env.BASE_URL;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
@@ -33,7 +36,7 @@ async function sendMessage(chatId, text, markup = null) {
 }
 
 /* ============================================================
-   TEXT LOCALIZATION
+   TEXT LOCALIZATION (исправлено)
 ============================================================ */
 const TEXT = {
   UA: {
@@ -53,7 +56,7 @@ const TEXT = {
 
     enter_data_btn: "Ввести дані",
     enter_data_text:
-      "Введіть дані за шаблоном:\n\nПІБ:\nТелефон (якщо відомо):\nПрофіль (якщо відомо):",
+      "Введіть дані за шаблоном:\n\nПІБ:\nТелефон (якщо відомо):\nПосилання на inst/ТГ/FB/інше:",
 
     order_accepted:
       "Ваше замовлення прийнято! Після підтвердження оплати наші спеціалісти почнуть роботу.",
@@ -80,7 +83,7 @@ const TEXT = {
 
     enter_data_btn: "Ввести данные",
     enter_data_text:
-      "Введите данные по шаблону:\n\nФИО:\nТелефон (если известно):\nПрофиль (если известно):",
+      "Введите данные по шаблону:\n\nФИО:\nТелефон (если известно):\nСсылка на inst/ТГ/FB/другое:",
 
     order_accepted:
       "Ваш заказ принят! После подтверждения оплаты специалисты приступят к работе.",
@@ -107,7 +110,7 @@ const TEXT = {
 
     enter_data_btn: "Enter data",
     enter_data_text:
-      "Enter the information using this template:\n\nFull name:\nPhone (optional):\nProfile (optional):",
+      "Enter the information using this template:\n\nFull name:\nPhone (optional):\nLink to Instagram/Telegram/Facebook/other:",
 
     order_accepted:
       "Your request has been accepted! After payment confirmation our specialists will begin work.",
@@ -254,9 +257,13 @@ app.post("/webhook", async (req, res) => {
 
     await sendMessage(uid, TEXT[lang].order_accepted);
 
+    const username = msg.from.username
+      ? `@${msg.from.username}`
+      : `без username`;
+
     await sendMessage(
       ADMIN_ID,
-      `🆕 <b>НОВЫЙ ЗАКАЗ</b>\n\n👤 ID: ${uid}\n📦 Тариф: ${tariff}\n💸 Хеш: ${tx}\n\n📄 Данные:\n${text}`
+      `🆕 <b>НОВЫЙ ЗАКАЗ</b>\n\n👤 Username: ${username}\n🆔 ID: ${uid}\n📦 Тариф: ${tariff}\n💸 Хеш: ${tx}\n\n📄 Данные:\n${text}`
     );
 
     delete userState[uid];
