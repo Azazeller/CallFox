@@ -14,24 +14,19 @@ const ADMIN_ID = process.env.ADMIN_ID;
 const CRYPTOCLOUD_KEY = process.env.CRYPTOCLOUD_API_KEY;
 const CRYPTOCLOUD_SHOP = process.env.CRYPTOCLOUD_SHOP_ID;
 
-const BASE_URL = process.env.BASE_URL;
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 /* ─────────────────────────────────────────────── */
-/*  УСТАНОВКА WEBHOOK                               */
-/* ─────────────────────────────────────────────── */
 async function setWebhook() {
   try {
-    const hookUrl = `${BASE_URL}/webhook`;
-    await axios.get(`${TELEGRAM_API}/setWebhook?url=${hookUrl}`);
-    console.log("Webhook установлен:", hookUrl);
+    await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_URL}`);
+    console.log("Webhook установлен:", WEBHOOK_URL);
   } catch (err) {
     console.error("Ошибка установки webhook:", err.response?.data || err.message);
   }
 }
 
-/* ─────────────────────────────────────────────── */
-/*  ОТПРАВКА СООБЩЕНИЙ                              */
 /* ─────────────────────────────────────────────── */
 async function sendMessage(chatId, text, markup = null) {
   try {
@@ -51,8 +46,6 @@ async function sendMessage(chatId, text, markup = null) {
 }
 
 /* ─────────────────────────────────────────────── */
-/*  МЕНЮ ТАРИФОВ                                    */
-/* ─────────────────────────────────────────────── */
 function getTariffKeyboard() {
   return {
     keyboard: [
@@ -66,8 +59,6 @@ function getTariffKeyboard() {
   };
 }
 
-/* ─────────────────────────────────────────────── */
-/*  СОЗДАНИЕ ПЛАТЕЖА CRYPTOCLOUD                    */
 /* ─────────────────────────────────────────────── */
 async function createCryptoInvoice(amount, orderId) {
   try {
@@ -95,8 +86,6 @@ async function createCryptoInvoice(amount, orderId) {
 }
 
 /* ─────────────────────────────────────────────── */
-/*  TELEGRAM WEBHOOK                                */
-/* ─────────────────────────────────────────────── */
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -107,13 +96,11 @@ app.post("/webhook", async (req, res) => {
   const text = msg.text;
   const userId = msg.chat.id;
 
-  // Уведомление админа
   await sendMessage(
     ADMIN_ID,
     `📩 <b>Новый пользователь:</b> ${userId}\nСообщение: ${text}`
   );
 
-  // Команда /start
   if (text === "/start") {
     await sendMessage(
       userId,
@@ -123,7 +110,6 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  // Тарифы
   const tariffs = {
     "MINI — $15": 15,
     "BASIC — $49": 49,
@@ -131,7 +117,6 @@ app.post("/webhook", async (req, res) => {
     "INDIVIDUAL": 99,
   };
 
-  // Выбор тарифа
   if (tariffs[text]) {
     const price = tariffs[text];
     const orderId = `${userId}_${Date.now()}`;
@@ -143,11 +128,9 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    const payUrl = invoice.result.url;
-
     await sendMessage(
       userId,
-      `Ваш заказ создан.\n\n💵 Сумма: <b>${price}$</b>\n\nПерейдите к оплате:\n${payUrl}`
+      `Ваш заказ создан.\n\n💵 Сумма: <b>${price}$</b>\n\nПерейдите к оплате:\n${invoice.result.url}`
     );
 
     await sendMessage(
@@ -158,12 +141,9 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  // Если текст не распознан
   await sendMessage(userId, "Не понял команду. Напишите /start");
 });
 
-/* ─────────────────────────────────────────────── */
-/*  CRYPTOCLOUD CALLBACK                            */
 /* ─────────────────────────────────────────────── */
 app.post("/cryptocloud", async (req, res) => {
   res.sendStatus(200);
@@ -175,13 +155,10 @@ app.post("/cryptocloud", async (req, res) => {
     const paidUser = orderId.split("_")[0];
 
     await sendMessage(paidUser, "💳 Ваш платёж получен! Мы начинаем работу.");
-
     await sendMessage(ADMIN_ID, `💰 Оплата получена!\nOrderID: ${orderId}`);
   }
 });
 
-/* ─────────────────────────────────────────────── */
-/*  СТАРТ СЕРВЕРА                                    */
 /* ─────────────────────────────────────────────── */
 const PORT = process.env.PORT || 3000;
 
