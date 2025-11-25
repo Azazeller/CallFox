@@ -72,8 +72,9 @@ async function createCryptoInvoice(amount, orderId) {
       },
       {
         headers: {
-          Authorization: CRYPTOCLOUD_KEY,
-          "Content-Type": "application/json",
+  Authorization: `Bearer ${CRYPTOCLOUD_KEY}`,
+  "Content-Type": "application/json",
+},
         },
       }
     );
