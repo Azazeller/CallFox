@@ -1,6 +1,8 @@
 import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
+import fs from "fs";
+import FormData from "form-data";
 
 dotenv.config();
 
@@ -15,6 +17,7 @@ const ADMIN_ID = 399248837; // твой ID, жестко задан
 const BASE_URL = process.env.BASE_URL;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_FILE_API = `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`;
 
 const userState = {}; // состояния пользователей
 
@@ -36,7 +39,31 @@ async function sendMessage(chatId, text, markup = null) {
 }
 
 /* ============================================================
-   TEXT LOCALIZATION (исправлено + добавлены планы и кнопки)
+   SEND DOCUMENT
+============================================================ */
+async function sendPDF(chatId, filePath, caption = "") {
+  try {
+    if (!fs.existsSync(filePath)) {
+      console.log("sendPDF: file not found", filePath);
+      return;
+    }
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("document", fs.createReadStream(filePath));
+    if (caption) form.append("caption", caption);
+
+    return await axios.post(`${TELEGRAM_FILE_API}`, form, {
+      headers: form.getHeaders(),
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+  } catch (e) {
+    console.log("sendPDF:", e.response?.data || e.message);
+  }
+}
+
+/* ============================================================
+   TEXT LOCALIZATION (полный текст тарифов включён)
 ============================================================ */
 const TEXT = {
   UA: {
@@ -66,6 +93,8 @@ const TEXT = {
     tariffs: ["Міні", "Базовий", "Розширений", "Індивідуальний"],
 
     about_plans: "Про тарифи",
+    samples: "Зразки звітів",
+    sending_samples: "Надсилаю PDF-зразки звітів…",
     back: "Назад",
 
     plans_text:
@@ -155,6 +184,8 @@ INDIVIDUAL — індивідуальна робота під конкретну
     tariffs: ["Мини", "Базовый", "Расширенный", "Индивидуальный"],
 
     about_plans: "О тарифах",
+    samples: "Образцы отчётов",
+    sending_samples: "Отправляю PDF-образцы отчётов…",
     back: "Назад",
 
     plans_text:
@@ -245,6 +276,8 @@ OSINT INDIVIDUAL — это не стандартный отчёт, а глуб�
     tariffs: ["MINI", "BASIC", "EXTENDED", "INDIVIDUAL"],
 
     about_plans: "About plans",
+    samples: "Sample reports",
+    sending_samples: "Sending sample PDF reports…",
     back: "Back",
 
     plans_text:
@@ -328,6 +361,7 @@ function tariffKeyboard(lang) {
       [{ text: t[1] }],
       [{ text: t[2] }],
       [{ text: t[3] }],
+      [{ text: TEXT[lang].samples }],
       [{ text: TEXT[lang].about_plans }],
       [{ text: TEXT[lang].contact_operator }],
     ],
@@ -371,6 +405,20 @@ app.post("/webhook", async (req, res) => {
 
   const lang = userState[uid]?.lang;
   if (!lang) return await sendMessage(uid, "Напишите /start");
+
+  /* ——— SAMPLES OF REPORTS ——— */
+  if (text === TEXT[lang].samples) {
+    userState[uid].step = "samples";
+
+    await sendMessage(uid, TEXT[lang].sending_samples);
+
+    await sendPDF(uid, "./files/mini.pdf", "OSINT MINI");
+    await sendPDF(uid, "./files/base.pdf", "OSINT BASE");
+    await sendPDF(uid, "./files/pro.pdf", "OSINT PRO");
+
+    await sendMessage(uid, TEXT[lang].choose_tariff, tariffKeyboard(lang));
+    return;
+  }
 
   /* ——— CONTACT OPERATOR ——— */
   if (text === TEXT[lang].contact_operator) {
@@ -442,9 +490,7 @@ app.post("/webhook", async (req, res) => {
       uid,
       TEXT[lang].hash_wait,
       {
-        keyboard: [
-          [{ text: TEXT[lang].enter_data_btn }],
-        ],
+        keyboard: [[{ text: TEXT[lang].enter_data_btn }]],
         resize_keyboard: true,
       }
     );
