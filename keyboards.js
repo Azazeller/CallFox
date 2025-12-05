@@ -3,19 +3,23 @@ import { TEXT } from "./texts.js";
 export function mainMenuInline(lang) {
   const t = TEXT[lang];
   const tariffs = t.tariffs;
+
   return {
     inline_keyboard: [
       [
         { text: tariffs[0], callback_data: "tariff_0" },
-        { text: tariffs[1], callback_data: "tariff_1" },
+        { text: tariffs[1], callback_data: "tariff_1" }
       ],
       [
         { text: tariffs[2], callback_data: "tariff_2" },
-        { text: tariffs[3], callback_data: "tariff_3" },
+        { text: tariffs[3], callback_data: "tariff_3" }
       ],
-      [{ text: t.samples, callback_data: "samples" }],
+      [
+        { text: t.samples, callback_data: "samples" },
+        { text: t.cases, callback_data: "cases" }
+      ],
       [{ text: t.about_plans, callback_data: "about_plans" }],
-      [{ text: t.contact_operator, url: "https://t.me/CALLFOX" }],
+      [{ text: t.contact_operator, url: "https://t.me/CALLFOX" }]
     ],
   };
 }
@@ -40,6 +44,15 @@ export function hashWaitInline(lang) {
 }
 
 export function backInline(lang) {
+  const t = TEXT[lang];
+  return {
+    inline_keyboard: [
+      [{ text: t.back, callback_data: "back_main" }],
+    ],
+  };
+}
+
+export function casesBackInline(lang) {
   const t = TEXT[lang];
   return {
     inline_keyboard: [
