@@ -10,6 +10,7 @@ import {
   paymentInline,
   hashWaitInline,
   backInline,
+  casesBackInline
 } from "./keyboards.js";
 
 dotenv.config();
@@ -21,24 +22,19 @@ app.use(express.json());
    CONFIG
 ============================================================ */
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = 399248837; // твой ID, жёстко задан
-const BASE_URL = process.env.BASE_URL;
+const ADMIN_ID = 399248837;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const TELEGRAM_FILE_API = `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`;
+const FILE_API = `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`;
 
-const userState = {}; // состояния пользователей
+const userState = {};
 
 /* ============================================================
-   HELPERS: MESSAGES
+   HELPERS
 ============================================================ */
 async function sendMessage(chatId, text, markup = null) {
   try {
-    const payload = {
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-    };
+    const payload = { chat_id: chatId, text, parse_mode: "HTML" };
     if (markup) payload.reply_markup = markup;
     return await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
   } catch (e) {
@@ -52,7 +48,7 @@ async function editMessage(chatId, messageId, text, markup = null) {
       chat_id: chatId,
       message_id: messageId,
       text,
-      parse_mode: "HTML",
+      parse_mode: "HTML"
     };
     if (markup) payload.reply_markup = markup;
     return await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
@@ -61,13 +57,11 @@ async function editMessage(chatId, messageId, text, markup = null) {
   }
 }
 
-async function answerCallback(callbackId, text = "") {
+async function answerCallback(id) {
   try {
-    const payload = {
-      callback_query_id: callbackId,
-    };
-    if (text) payload.text = text;
-    return await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, payload);
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+      callback_query_id: id
+    });
   } catch (e) {
     console.log("answerCallback:", e.response?.data || e.message);
   }
@@ -75,19 +69,15 @@ async function answerCallback(callbackId, text = "") {
 
 async function sendPDF(chatId, filePath, caption = "") {
   try {
-    if (!fs.existsSync(filePath)) {
-      console.log("sendPDF: file not found", filePath);
-      return;
-    }
+    if (!fs.existsSync(filePath)) return;
+
     const form = new FormData();
     form.append("chat_id", chatId);
     form.append("document", fs.createReadStream(filePath));
     if (caption) form.append("caption", caption);
 
-    return await axios.post(`${TELEGRAM_FILE_API}`, form, {
-      headers: form.getHeaders(),
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
+    return await axios.post(FILE_API, form, {
+      headers: form.getHeaders()
     });
   } catch (e) {
     console.log("sendPDF:", e.response?.data || e.message);
@@ -98,24 +88,20 @@ async function sendPDF(chatId, filePath, caption = "") {
    REMINDERS
 ============================================================ */
 function scheduleReminders(uid) {
-  // Первое напоминание через 60 минут
   setTimeout(async () => {
     if (!userState[uid]) return;
-    if (userState[uid].reminder1Sent) return;
-    const lang = userState[uid].lang || "RU";
-    const t = TEXT[lang];
-    userState[uid].reminder1Sent = true;
-    await sendMessage(uid, t.reminder1);
+    if (userState[uid].rem1) return;
+    userState[uid].rem1 = true;
+    const lang = userState[uid].lang;
+    await sendMessage(uid, TEXT[lang].reminder1);
   }, 60 * 60 * 1000);
 
-  // Второе напоминание через 24 часа
   setTimeout(async () => {
     if (!userState[uid]) return;
-    if (userState[uid].reminder2Sent) return;
-    const lang = userState[uid].lang || "RU";
-    const t = TEXT[lang];
-    userState[uid].reminder2Sent = true;
-    await sendMessage(uid, t.reminder2);
+    if (userState[uid].rem2) return;
+    userState[uid].rem2 = true;
+    const lang = userState[uid].lang;
+    await sendMessage(uid, TEXT[lang].reminder2);
   }, 24 * 60 * 60 * 1000);
 }
 
@@ -127,90 +113,76 @@ app.post("/webhook", async (req, res) => {
 
   const update = req.body;
 
-  /* -------- CALLBACK QUERIES (INLINE BUTTONS) -------- */
+  /* ------------------------------------------------------------
+     CALLBACK HANDLERS
+  ------------------------------------------------------------ */
   if (update.callback_query) {
     const cq = update.callback_query;
     const data = cq.data;
     const chatId = cq.message.chat.id;
     const msgId = cq.message.message_id;
-    const uid = chatId;
-    const lang = userState[uid]?.lang;
 
-    // Если язык ещё не выбран и callback не про язык — просим /start
-    if (!lang && !data.startsWith("lang_")) {
-      await answerCallback(cq.id);
-      await sendMessage(chatId, "Напишите /start");
-      return;
-    }
+    // LANGUAGE SELECT
+    if (data.startsWith("lang_")) {
+      const lang = data.split("_")[1];
+      userState[chatId] = { lang, step: "tariffs" };
 
-    /* ----- LANGUAGE SELECT INLINE ----- */
-    if (data === "lang_UA" || data === "lang_RU" || data === "lang_EN") {
-      let selLang = "RU";
-      if (data === "lang_UA") selLang = "UA";
-      if (data === "lang_EN") selLang = "EN";
-
-      userState[uid] = {
-        lang: selLang,
-        step: "tariffs",
-      };
-
-      if (!userState[uid].remindersScheduled) {
-        userState[uid].remindersScheduled = true;
-        scheduleReminders(uid);
+      if (!userState[chatId].remScheduled) {
+        userState[chatId].remScheduled = true;
+        scheduleReminders(chatId);
       }
 
-      const t = TEXT[selLang];
+      const t = TEXT[lang];
 
       await answerCallback(cq.id);
       await editMessage(
         chatId,
         msgId,
         `${t.welcome}\n\n${t.choose_tariff}`,
-        mainMenuInline(selLang)
+        mainMenuInline(lang)
       );
       return;
     }
 
-    // From here on язык уже выбран
+    // If language not chosen yet
+    const lang = userState[chatId]?.lang;
+    if (!lang) {
+      await answerCallback(cq.id);
+      await sendMessage(chatId, "Напишите /start");
+      return;
+    }
     const t = TEXT[lang];
 
-    /* ----- MAIN MENU: TARIFFS ----- */
+    /* ----- TARIFFS ----- */
     if (data.startsWith("tariff_")) {
       await answerCallback(cq.id);
 
-      const index = parseInt(data.split("_")[1], 10);
+      const index = Number(data.split("_")[1]);
       const tariffName = t.tariffs[index];
 
       if (index === 3) {
-        // INDIVIDUAL — просто текст, без изменения step
         await sendMessage(chatId, t.individual_msg);
         return;
       }
 
-      // MINI / BASE / PRO
-      userState[uid] = {
-        ...(userState[uid] || {}),
-        lang,
-        step: "await_hash",
-        tariff: tariffName,
-      };
+      userState[chatId].tariff = tariffName;
+      userState[chatId].step = "await_hash";
 
       const price = t.prices[index];
       const deadline = t.deadlines[index];
 
-      const text = `${t.pay_address_title}
+      const payText = `${t.pay_address_title}
 <code>TDUknnJcPscxS3H9reMnzcFtKK958UAF3b</code>
 
-Стоимость / Price: ${price}
-Срок / Time: ${deadline}
+${price}, ${deadline}
 
 ${t.after_payment}`;
 
-      await sendMessage(chatId, text, paymentInline(lang));
+      await sendMessage(chatId, payText, paymentInline(lang));
       return;
     }
 
-    /* ----- SAMPLES: PDF REPORTS ----- */
+    /* ----- SAMPLE REPORTS ----- */
     if (data === "samples") {
       await answerCallback(cq.id);
 
@@ -219,36 +191,31 @@ ${t.after_payment}`;
       await sendPDF(chatId, "./files/base.pdf", "OSINT BASE");
       await sendPDF(chatId, "./files/pro.pdf", "OSINT PRO");
 
-      // После отправки примеров — новое сообщение с меню, чтобы не ломать структуру
       await sendMessage(chatId, t.choose_tariff, mainMenuInline(lang));
+      return;
+    }
+
+    /* ----- TYPICAL CASES ----- */
+    if (data === "cases") {
+      userState[chatId].step = "cases";
+
+      await answerCallback(cq.id);
+      await editMessage(chatId, msgId, t.cases_text, casesBackInline(lang));
       return;
     }
 
     /* ----- ABOUT PLANS ----- */
     if (data === "about_plans") {
-      userState[uid] = {
-        ...(userState[uid] || {}),
-        lang,
-        step: "about",
-      };
-
+      userState[chatId].step = "about";
       await answerCallback(cq.id);
-      await editMessage(
-        chatId,
-        msgId,
-        t.plans_text,
-        backInline(lang)
-      );
+
+      await editMessage(chatId, msgId, t.plans_text, backInline(lang));
       return;
     }
 
-    /* ----- BACK TO MAIN MENU ----- */
-    if (data === "back_main") {
-      userState[uid] = {
-        ...(userState[uid] || {}),
-        lang,
-        step: "tariffs",
-      };
+    /* ----- BACK ----- */
+    if (data === "back_main" || data === "cases_back") {
+      userState[chatId].step = "tariffs";
 
       await answerCallback(cq.id);
       await editMessage(
@@ -262,12 +229,7 @@ ${t.after_payment}`;
 
     /* ----- CONFIRM PAYMENT ----- */
     if (data === "confirm_payment") {
-      userState[uid] = {
-        ...(userState[uid] || {}),
-        lang,
-        step: "enter_hash",
-      };
-
+      userState[chatId].step = "enter_hash";
       await answerCallback(cq.id);
       await sendMessage(chatId, t.enter_hash);
       return;
@@ -275,97 +237,88 @@ ${t.after_payment}`;
 
     /* ----- ENTER DATA BUTTON ----- */
     if (data === "enter_data") {
-      userState[uid] = {
-        ...(userState[uid] || {}),
-        lang,
-        step: "typing_form",
-      };
-
+      userState[chatId].step = "typing_form";
       await answerCallback(cq.id);
       await sendMessage(chatId, t.enter_data_text);
       return;
     }
 
-    // Unknown callback
     await answerCallback(cq.id);
     return;
   }
 
-  /* -------- NORMAL MESSAGES (TEXT) -------- */
-  if (!update.message) return;
+  /* ------------------------------------------------------------
+     STANDARD MESSAGES
+  ------------------------------------------------------------ */
+  if (update.message) {
+    const msg = update.message;
+    const text = msg.text;
+    const chatId = msg.chat.id;
 
-  const msg = update.message;
-  const text = msg.text;
-  const uid = msg.chat.id;
+    if (text === "/start") {
+      userState[chatId] = { step: "choose_lang" };
 
-  // /start — всегда сбрасывает состояние и показывает выбор языка
-  if (text === "/start") {
-    userState[uid] = { step: "choose_lang" };
+      const selectLang = {
+        inline_keyboard: [
+          [
+            { text: "Українська", callback_data: "lang_UA" },
+            { text: "Русский", callback_data: "lang_RU" },
+            { text: "English", callback_data: "lang_EN" }
+          ]
+        ]
+      };
 
-    const langSelectInline = {
-      inline_keyboard: [
-        [
-          { text: "Українська", callback_data: "lang_UA" },
-          { text: "Русский", callback_data: "lang_RU" },
-          { text: "English", callback_data: "lang_EN" },
-        ],
-      ],
-    };
+      await sendMessage(chatId, "Оберіть мову / Выберите язык / Choose language:", selectLang);
+      return;
+    }
 
-    await sendMessage(uid, TEXT.UA.choose_lang, langSelectInline);
-    return;
-  }
+    const lang = userState[chatId]?.lang;
+    if (!lang) {
+      await sendMessage(chatId, "Напишите /start");
+      return;
+    }
 
-  const lang = userState[uid]?.lang;
+    const t = TEXT[lang];
 
-  // Если ещё не выбрали язык — просим /start
-  if (!lang) {
-    await sendMessage(uid, "Напишите /start");
-    return;
-  }
+    /* ----- ENTER HASH TEXT ----- */
+    if (userState[chatId]?.step === "enter_hash") {
+      userState[chatId].tx = text;
+      userState[chatId].step = "enter_data";
 
-  const t = TEXT[lang];
+      await sendMessage(chatId, t.hash_wait, hashWaitInline(lang));
+      return;
+    }
 
-  /* ----- ENTER HASH (TEXT) ----- */
-  if (userState[uid]?.step === "enter_hash") {
-    userState[uid].tx = text;
-    userState[uid].step = "enter_data";
+    /* ----- USER SENT FORM ----- */
+    if (userState[chatId]?.step === "typing_form") {
+      const tariff = userState[chatId].tariff;
+      const tx = userState[chatId].tx;
 
-    await sendMessage(uid, t.hash_wait, hashWaitInline(lang));
-    return;
-  }
+      await sendMessage(chatId, t.order_accepted);
 
-  /* ----- USER SENT FORM (TEXT) ----- */
-  if (userState[uid]?.step === "typing_form") {
-    const tariff = userState[uid].tariff;
-    const tx = userState[uid].tx;
+      const username = msg.from.username ? `@${msg.from.username}` : "без username";
 
-    await sendMessage(uid, t.order_accepted);
+      await sendMessage(
+        ADMIN_ID,
+        `🆕 <b>НОВЫЙ ЗАКАЗ</b>\n\n👤 Username: ${username}\n🆔 ID: ${chatId}\n📦 Тариф: ${tariff}\n💸 Хеш: ${tx}\n\n📄 Данные:\n${text}`
+      );
 
-    const username = msg.from.username
-      ? `@${msg.from.username}`
-      : `без username`;
+      delete userState[chatId];
+      return;
+    }
 
+    /* ----- FALLBACK ----- */
     await sendMessage(
-      ADMIN_ID,
-      `🆕 <b>НОВЫЙ ЗАКАЗ</b>\n\n👤 Username: ${username}\n🆔 ID: ${uid}\n📦 Тариф: ${tariff}\n💸 Хеш: ${tx}\n\n📄 Данные:\n${text}`
+      chatId,
+      `${t.unknown}\n\n${t.choose_tariff}`,
+      mainMenuInline(lang)
     );
-
-    delete userState[uid];
-    return;
   }
-
-  /* ----- FALLBACK: ПОВТОРНОЕ МЕНЮ ----- */
-  await sendMessage(
-    uid,
-    `${t.unknown}\n\n${t.choose_tariff}`,
-    mainMenuInline(lang)
-  );
 });
 
 /* ============================================================
    SERVER
 ============================================================ */
 app.listen(3000, () => {
-  console.log("Bot running on port 3000 (inline, modular)");
+  console.log("Bot running on port 3000 (inline OSINT bot)");
 });
