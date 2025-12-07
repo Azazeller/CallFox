@@ -25,8 +25,8 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = 399248837;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const FILE_API = `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`;
 
+/* USER STATE */
 const userState = {};
 
 /* ============================================================
@@ -34,7 +34,14 @@ const userState = {};
 ============================================================ */
 async function sendMessage(chatId, text, markup = null) {
   try {
-    const payload = { chat_id: chatId, text, parse_mode: "HTML" };
+    const payload = {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      disable_notification: true
+    };
+
     if (markup) payload.reply_markup = markup;
     return await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
   } catch (e) {
@@ -48,7 +55,8 @@ async function editMessage(chatId, messageId, text, markup = null) {
       chat_id: chatId,
       message_id: messageId,
       text,
-      parse_mode: "HTML"
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     };
     if (markup) payload.reply_markup = markup;
     return await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
@@ -59,7 +67,7 @@ async function editMessage(chatId, messageId, text, markup = null) {
 
 async function answerCallback(id) {
   try {
-    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+    return await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
       callback_query_id: id
     });
   } catch (e) {
@@ -76,11 +84,30 @@ async function sendPDF(chatId, filePath, caption = "") {
     form.append("document", fs.createReadStream(filePath));
     if (caption) form.append("caption", caption);
 
-    return await axios.post(FILE_API, form, {
-      headers: form.getHeaders()
-    });
+    return await axios.post(
+      `${TELEGRAM_API}/sendDocument`,
+      form,
+      { headers: form.getHeaders() }
+    );
   } catch (e) {
     console.log("sendPDF:", e.response?.data || e.message);
+  }
+}
+
+async function sendVideo(chatId, filePath, caption = "") {
+  try {
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("video", fs.createReadStream(filePath));
+    if (caption) form.append("caption", caption);
+
+    return await axios.post(
+      `${TELEGRAM_API}/sendVideo`,
+      form,
+      { headers: form.getHeaders() }
+    );
+  } catch (e) {
+    console.log("sendVideo:", e.response?.data || e.message);
   }
 }
 
@@ -92,6 +119,7 @@ function scheduleReminders(uid) {
     if (!userState[uid]) return;
     if (userState[uid].rem1) return;
     userState[uid].rem1 = true;
+
     const lang = userState[uid].lang;
     await sendMessage(uid, TEXT[lang].reminder1);
   }, 60 * 60 * 1000);
@@ -100,6 +128,7 @@ function scheduleReminders(uid) {
     if (!userState[uid]) return;
     if (userState[uid].rem2) return;
     userState[uid].rem2 = true;
+
     const lang = userState[uid].lang;
     await sendMessage(uid, TEXT[lang].reminder2);
   }, 24 * 60 * 60 * 1000);
@@ -110,19 +139,18 @@ function scheduleReminders(uid) {
 ============================================================ */
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-
   const update = req.body;
 
   /* ------------------------------------------------------------
-     CALLBACK HANDLERS
+     CALLBACK
   ------------------------------------------------------------ */
   if (update.callback_query) {
     const cq = update.callback_query;
-    const data = cq.data;
     const chatId = cq.message.chat.id;
     const msgId = cq.message.message_id;
+    const data = cq.data;
 
-    // LANGUAGE SELECT
+    /* ---- LANGUAGE SELECT ---- */
     if (data.startsWith("lang_")) {
       const lang = data.split("_")[1];
       userState[chatId] = { lang, step: "tariffs" };
@@ -132,35 +160,34 @@ app.post("/webhook", async (req, res) => {
         scheduleReminders(chatId);
       }
 
-      const t = TEXT[lang];
-
       await answerCallback(cq.id);
       await editMessage(
         chatId,
         msgId,
-        `${t.welcome}\n\n${t.choose_tariff}`,
+        `${TEXT[lang].welcome}\n\n${TEXT[lang].choose_tariff}`,
         mainMenuInline(lang)
       );
       return;
     }
 
-    // If language not chosen yet
+    /* no lang selected yet */
     const lang = userState[chatId]?.lang;
     if (!lang) {
       await answerCallback(cq.id);
       await sendMessage(chatId, "Напишите /start");
       return;
     }
+
     const t = TEXT[lang];
 
-    /* ----- TARIFFS ----- */
+    /* ---- TARIFFS ---- */
     if (data.startsWith("tariff_")) {
       await answerCallback(cq.id);
 
-      const index = Number(data.split("_")[1]);
-      const tariffName = t.tariffs[index];
+      const idx = Number(data.split("_")[1]);
+      const tariffName = t.tariffs[idx];
 
-      if (index === 3) {
+      if (idx === 3) {
         await sendMessage(chatId, t.individual_msg);
         return;
       }
@@ -168,25 +195,23 @@ app.post("/webhook", async (req, res) => {
       userState[chatId].tariff = tariffName;
       userState[chatId].step = "await_hash";
 
-      const price = t.prices[index];
-      const deadline = t.deadlines[index];
-
-      const payText = `${t.pay_address_title}
+      const msg = `${t.pay_address_title}
 <code>TDUknnJcPscxS3H9reMnzcFtKK958UAF3b</code>
 
-${price}, ${deadline}
+${t.prices[idx]}, ${t.deadlines[idx]}
 
 ${t.after_payment}`;
 
-      await sendMessage(chatId, payText, paymentInline(lang));
+      await sendMessage(chatId, msg, paymentInline(lang));
       return;
     }
 
-    /* ----- SAMPLE REPORTS ----- */
+    /* ---- SAMPLE REPORTS ---- */
     if (data === "samples") {
       await answerCallback(cq.id);
 
       await sendMessage(chatId, t.sending_samples);
+
       await sendPDF(chatId, "./files/mini.pdf", "OSINT MINI");
       await sendPDF(chatId, "./files/base.pdf", "OSINT BASE");
       await sendPDF(chatId, "./files/pro.pdf", "OSINT PRO");
@@ -195,29 +220,41 @@ ${t.after_payment}`;
       return;
     }
 
-    /* ----- TYPICAL CASES ----- */
+    /* ---- VIDEO TUTORIAL ---- */
+    if (data === "video_tutorial") {
+      await answerCallback(cq.id);
+
+      await sendMessage(chatId, t.sending_video);
+
+      await sendVideo(chatId, "./files/tutorial_2.mp4");
+
+      await sendMessage(chatId, t.choose_tariff, mainMenuInline(lang));
+      return;
+    }
+
+    /* ---- TYPICAL CASES ---- */
     if (data === "cases") {
+      await answerCallback(cq.id);
       userState[chatId].step = "cases";
 
-      await answerCallback(cq.id);
       await editMessage(chatId, msgId, t.cases_text, casesBackInline(lang));
       return;
     }
 
-    /* ----- ABOUT PLANS ----- */
+    /* ---- ABOUT PLANS ---- */
     if (data === "about_plans") {
-      userState[chatId].step = "about";
       await answerCallback(cq.id);
+      userState[chatId].step = "about";
 
       await editMessage(chatId, msgId, t.plans_text, backInline(lang));
       return;
     }
 
-    /* ----- BACK ----- */
-    if (data === "back_main" || data === "cases_back") {
+    /* ---- BACK TO MAIN ---- */
+    if (data === "back_main") {
+      await answerCallback(cq.id);
       userState[chatId].step = "tariffs";
 
-      await answerCallback(cq.id);
       await editMessage(
         chatId,
         msgId,
@@ -227,18 +264,18 @@ ${t.after_payment}`;
       return;
     }
 
-    /* ----- CONFIRM PAYMENT ----- */
+    /* ---- CONFIRM PAYMENT ---- */
     if (data === "confirm_payment") {
-      userState[chatId].step = "enter_hash";
       await answerCallback(cq.id);
+      userState[chatId].step = "enter_hash";
       await sendMessage(chatId, t.enter_hash);
       return;
     }
 
-    /* ----- ENTER DATA BUTTON ----- */
+    /* ---- ENTER DATA ---- */
     if (data === "enter_data") {
-      userState[chatId].step = "typing_form";
       await answerCallback(cq.id);
+      userState[chatId].step = "typing_form";
       await sendMessage(chatId, t.enter_data_text);
       return;
     }
@@ -248,17 +285,17 @@ ${t.after_payment}`;
   }
 
   /* ------------------------------------------------------------
-     STANDARD MESSAGES
+     NORMAL MESSAGE
   ------------------------------------------------------------ */
   if (update.message) {
     const msg = update.message;
-    const text = msg.text;
     const chatId = msg.chat.id;
+    const text = msg.text;
 
     if (text === "/start") {
       userState[chatId] = { step: "choose_lang" };
 
-      const selectLang = {
+      const langKeyboard = {
         inline_keyboard: [
           [
             { text: "Українська", callback_data: "lang_UA" },
@@ -268,7 +305,11 @@ ${t.after_payment}`;
         ]
       };
 
-      await sendMessage(chatId, "Оберіть мову / Выберите язык / Choose language:", selectLang);
+      await sendMessage(
+        chatId,
+        "Оберіть мову / Выберите язык / Choose language:",
+        langKeyboard
+      );
       return;
     }
 
@@ -280,7 +321,7 @@ ${t.after_payment}`;
 
     const t = TEXT[lang];
 
-    /* ----- ENTER HASH TEXT ----- */
+    /* ---- HASH ENTERED ---- */
     if (userState[chatId]?.step === "enter_hash") {
       userState[chatId].tx = text;
       userState[chatId].step = "enter_data";
@@ -289,7 +330,7 @@ ${t.after_payment}`;
       return;
     }
 
-    /* ----- USER SENT FORM ----- */
+    /* ---- USER SENDS FORM ---- */
     if (userState[chatId]?.step === "typing_form") {
       const tariff = userState[chatId].tariff;
       const tx = userState[chatId].tx;
@@ -307,7 +348,7 @@ ${t.after_payment}`;
       return;
     }
 
-    /* ----- FALLBACK ----- */
+    /* ---- FALLBACK ---- */
     await sendMessage(
       chatId,
       `${t.unknown}\n\n${t.choose_tariff}`,
@@ -320,5 +361,5 @@ ${t.after_payment}`;
    SERVER
 ============================================================ */
 app.listen(3000, () => {
-  console.log("Bot running on port 3000 (inline OSINT bot)");
+  console.log("Bot running on port 3000 (OSINT inline bot)");
 });
