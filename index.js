@@ -10,7 +10,7 @@ import {
   paymentInline,
   hashWaitInline,
   backInline,
-  casesBackInline
+  casesBackInline,
 } from "./keyboards.js";
 
 dotenv.config();
@@ -25,6 +25,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = 399248837;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const MAX_TG_TEXT = 4000;
 
 /* USER STATE */
 const userState = {};
@@ -39,7 +40,7 @@ async function sendMessage(chatId, text, markup = null) {
       text,
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      disable_notification: true
+      disable_notification: true,
     };
 
     if (markup) payload.reply_markup = markup;
@@ -56,7 +57,7 @@ async function editMessage(chatId, messageId, text, markup = null) {
       message_id: messageId,
       text,
       parse_mode: "HTML",
-      disable_web_page_preview: true
+      disable_web_page_preview: true,
     };
     if (markup) payload.reply_markup = markup;
     return await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
@@ -68,10 +69,44 @@ async function editMessage(chatId, messageId, text, markup = null) {
 async function answerCallback(id) {
   try {
     return await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-      callback_query_id: id
+      callback_query_id: id,
     });
   } catch (e) {
     console.log("answerCallback:", e.response?.data || e.message);
+  }
+}
+
+/**
+ * Отправка длинных текстов кусками <= 4000 символов.
+ * Кнопки ставим только под ПОСЛЕДНИМ сообщением.
+ */
+async function sendLongMessage(chatId, text, markup = null) {
+  if (!text || typeof text !== "string") return;
+
+  if (text.length <= MAX_TG_TEXT) {
+    return await sendMessage(chatId, text, markup);
+  }
+
+  let remaining = text;
+  let first = true;
+
+  while (remaining.length > 0) {
+    let chunk = remaining.slice(0, MAX_TG_TEXT);
+
+    if (remaining.length > MAX_TG_TEXT) {
+      const lastNl = chunk.lastIndexOf("\n");
+      if (lastNl > 0) {
+        chunk = chunk.slice(0, lastNl);
+      }
+    }
+
+    remaining = remaining.slice(chunk.length);
+
+    // если это последний кусок — вешаем клаву
+    const isLast = remaining.length === 0;
+    await sendMessage(chatId, chunk, isLast ? markup : null);
+
+    first = false;
   }
 }
 
@@ -84,11 +119,9 @@ async function sendPDF(chatId, filePath, caption = "") {
     form.append("document", fs.createReadStream(filePath));
     if (caption) form.append("caption", caption);
 
-    return await axios.post(
-      `${TELEGRAM_API}/sendDocument`,
-      form,
-      { headers: form.getHeaders() }
-    );
+    return await axios.post(`${TELEGRAM_API}/sendDocument`, form, {
+      headers: form.getHeaders(),
+    });
   } catch (e) {
     console.log("sendPDF:", e.response?.data || e.message);
   }
@@ -96,16 +129,19 @@ async function sendPDF(chatId, filePath, caption = "") {
 
 async function sendVideo(chatId, filePath, caption = "") {
   try {
+    if (!fs.existsSync(filePath)) {
+      console.log("Video file not found:", filePath);
+      return;
+    }
+
     const form = new FormData();
     form.append("chat_id", chatId);
     form.append("video", fs.createReadStream(filePath));
     if (caption) form.append("caption", caption);
 
-    return await axios.post(
-      `${TELEGRAM_API}/sendVideo`,
-      form,
-      { headers: form.getHeaders() }
-    );
+    return await axios.post(`${TELEGRAM_API}/sendVideo`, form, {
+      headers: form.getHeaders(),
+    });
   } catch (e) {
     console.log("sendVideo:", e.response?.data || e.message);
   }
@@ -170,7 +206,6 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    /* no lang selected yet */
     const lang = userState[chatId]?.lang;
     if (!lang) {
       await answerCallback(cq.id);
@@ -225,7 +260,6 @@ ${t.after_payment}`;
       await answerCallback(cq.id);
 
       await sendMessage(chatId, t.sending_video);
-
       await sendVideo(chatId, "./files/tutorial_2.mp4");
 
       await sendMessage(chatId, t.choose_tariff, mainMenuInline(lang));
@@ -237,7 +271,8 @@ ${t.after_payment}`;
       await answerCallback(cq.id);
       userState[chatId].step = "cases";
 
-      await editMessage(chatId, msgId, t.cases_text, casesBackInline(lang));
+      // длинный текст -> всегда через sendLongMessage (новое сообщение)
+      await sendLongMessage(chatId, t.cases_text, casesBackInline(lang));
       return;
     }
 
@@ -246,7 +281,8 @@ ${t.after_payment}`;
       await answerCallback(cq.id);
       userState[chatId].step = "about";
 
-      await editMessage(chatId, msgId, t.plans_text, backInline(lang));
+      // тут точно длинный текст -> отправляем кусками
+      await sendLongMessage(chatId, t.plans_text, backInline(lang));
       return;
     }
 
@@ -255,9 +291,8 @@ ${t.after_payment}`;
       await answerCallback(cq.id);
       userState[chatId].step = "tariffs";
 
-      await editMessage(
+      await sendMessage(
         chatId,
-        msgId,
         `${t.welcome}\n\n${t.choose_tariff}`,
         mainMenuInline(lang)
       );
@@ -300,9 +335,9 @@ ${t.after_payment}`;
           [
             { text: "Українська", callback_data: "lang_UA" },
             { text: "Русский", callback_data: "lang_RU" },
-            { text: "English", callback_data: "lang_EN" }
-          ]
-        ]
+            { text: "English", callback_data: "lang_EN" },
+          ],
+        ],
       };
 
       await sendMessage(
